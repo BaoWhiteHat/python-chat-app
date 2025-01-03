@@ -23,3 +23,5 @@ pip-selfcheck.json
 # Dependency directories
 node_modules/
 /dist/
+
+instance/*.db
