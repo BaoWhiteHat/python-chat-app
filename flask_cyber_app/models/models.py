@@ -29,7 +29,8 @@ class Chat(db.Model):
 class Session(db.Model):
     __tablename__ = "sessions"
     id = db.Column(db.Integer, primary_key=True)
-    socket_id = db.Column(db.String(255), unique=True, nullable=False)
+    socket_id = db.Column(db.String(255), unique=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="CASCADE"), nullable=False)
-    fernet_key = db.Column(db.String(255), nullable=False)
+    fernet_key = db.Column(db.String(255) , unique=True)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), default=func.now())

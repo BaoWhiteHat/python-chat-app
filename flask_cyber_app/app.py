@@ -2,8 +2,10 @@ import os
 
 from flask import Flask
 from config.configs import Config
+from config.expection_handler import ExceptionHandler
 from config.extensions import Extension
 from flask_cyber_app.models.models import User
+from flask_cyber_app.routes.all_routes import all_routes
 from flask_cyber_app.routes.router import Router
 
 
@@ -11,18 +13,19 @@ class App:
     def __init__(self):
         # Specify the location of the templates directory
         template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'templates'))
-        print(template_dir)
         self.app = Flask(__name__, template_folder=template_dir)
-        self.router = Router()  # Instantiate Router
+        self.router = Router(combined_routes=all_routes)  # Instantiate Router
         self.config_extensions()
         self.register_routes()
         self.initialize_database()
+
+        # self.exception_handler = ExceptionHandler(self.app)
 
     def config_extensions(self):
         """
         Configure extensions and update the app with necessary settings.
         """
-        self.app.config.update(Config.DB_CONFIG)
+        self.app.config.update(Config.CONFIG)
         Extension.db.init_app(self.app)
         Extension.socketio.init_app(self.app)
         Extension.login_manager.init_app(self.app)
@@ -36,7 +39,13 @@ class App:
         """
         Register all application routes using the Router class.
         """
-        self.router.register_routes(self.app)  # Call on Router instance
+        self.router.register_routes(
+            self.app,
+            excluded_endpoints=[
+                'auth.login',  # Skip session validation for login
+                'auth.sign_up',  # Skip session validation for sign-up
+            ]
+        )  # Call on Router instance
 
     def initialize_database(self):
         """

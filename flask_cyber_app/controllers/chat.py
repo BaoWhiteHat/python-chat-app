@@ -1,5 +1,5 @@
 import random
-from flask import request
+from flask import request, g
 from flask_socketio import emit
 from flask_cyber_app.models.models import db, User, Chat, Session
 from flask_cyber_app.utils.security_utils import SecurityUtils
@@ -9,12 +9,14 @@ class ChatController:
     def __init__(self, socketio):
         self.socketio = socketio
         self.register_events()
+        self.events_registered = False
 
     def register_events(self):
         self.socketio.on_event("key_exchange_init", self.handle_key_exchange_init)
         self.socketio.on_event("key_exchange_final", self.handle_key_exchange_final)
         self.socketio.on_event("send_message", self.handle_message)
         self.socketio.on_event("disconnect", self.handle_disconnect)
+        self.events_registered = True
 
     def handle_key_exchange_init(self):
         # Generate ECDH key pair
@@ -48,22 +50,24 @@ class ChatController:
         avatar_url = f"https://avatar.iran.liara.run/public/boy?username={username}"
         user = User.query.filter_by(username=username).first()
         if not user:
-            user = User(username=username, avatar=avatar_url)
+            user = User(avatar=avatar_url)
+            print(user)
             db.session.add(user)
             db.session.commit()
 
         # Store session in the database
         session = Session(socket_id=request.sid, user_id=user.id, fernet_key=fernet_key)
+        print(session)
         db.session.add(session)
         db.session.commit()
 
         emit("key_exchange_complete", {"message": "Key exchange successful!"})
 
     def handle_message(self, data):
-        # Retrieve session from the database
-        session = Session.query.filter_by(socket_id=request.sid).first()
+        # Retrieve session from the global context
+        session = getattr(g, "current_session", None)
         if not session:
-            emit("error", {"message": "Session not found!"})
+            emit("error", {"message": "Active session not found!"})
             return
 
         fernet = SecurityUtils.create_fernet_instance(session.fernet_key.encode())
