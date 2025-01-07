@@ -198,6 +198,7 @@
             // Handle server's public key response
             socket.on("key_exchange_response", async (data) => {
                 try {
+                     // Step 1: Import server's public key
                     const serverPublicKey = await crypto.subtle.importKey(
                         "spki",
                         base64ToArrayBuffer(data.public_key),
@@ -206,34 +207,26 @@
                         []
                     );
 
+                    // Step 2: Generate client key pair
                     const keyPair = await crypto.subtle.generateKey(
                         { name: "ECDH", namedCurve: "P-256" },
                         true,
-                        ["deriveKey"]
+                        ["deriveBits"]
                     );
 
-
-                    const sharedSecret = await crypto.subtle.deriveKey(
+                    // Step 3: Derive shared secret using ECDH
+                    const sharedSecret = await crypto.subtle.deriveBits(
                         { name: "ECDH", public: serverPublicKey },
                         keyPair.privateKey,
-                        { name: "AES-GCM", length: 256 },
-                        false,
-                        ["encrypt", "decrypt"]
+                        256 // Length of the shared secret in bits
                     );
 
-                    // Derive a Fernet-compatible key (Base64-encoded)
-                    const rawKey = await crypto.subtle.exportKey("raw", sharedSecret);
-                    // Log the raw shared secret as Base64
-                    const base64SharedSecret = btoa(String.fromCharCode(...new Uint8Array(rawKey)));
-                    console.log("Shared Secret (Base64):", base64SharedSecret);
-                    // Use SHA-256 or any other hashing to ensure a 32-byte key
-                    const fernetKeyBuffer = await crypto.subtle.digest("SHA-256", rawKey);
-                    console.log("fernetKeyBuffer:" + fernetKeyBuffer)
-                    fernetKey = btoa(String.fromCharCode(...new Uint8Array(fernetKeyBuffer)));
+                    // Step 4: Derive a Fernet-compatible key using HKDF
+                    fernetKey = await deriveFernetKey(sharedSecret);
                     console.log("Derived Fernet Key:", fernetKey);
 
+                    // Step 5: Export the client's public key and send it to the server
                     const clientPublicKey = await crypto.subtle.exportKey("spki", keyPair.publicKey);
-                    console.log(arrayBufferToBase64(clientPublicKey))
                     socket.emit("key_exchange_final", { public_key: arrayBufferToBase64(clientPublicKey) });
                 } catch (error) {
                     console.error("Key exchange failed:", error);
@@ -389,7 +382,36 @@
                 return fernetInstance.decode();
             }
 
-            // Decrypt a message manually
+            // Function to derive a Fernet-compatible key using HKDF
+            async function deriveFernetKey(sharedSecret) {
+                // Import the raw shared secret as an HKDF input key
+                const hkdfKey = await crypto.subtle.importKey(
+                    "raw",
+                    sharedSecret,
+                    { name: "HKDF" },
+                    false,
+                    ["deriveKey"]
+                );
+
+                // Derive a 256-bit key (32 bytes) using HKDF
+                const derivedKey = await crypto.subtle.deriveKey(
+                    {
+                        name: "HKDF",
+                        hash: "SHA-256",
+                        salt: new Uint8Array(0), // No salt
+                        info: new TextEncoder().encode("handshake data") // Context-specific data
+                    },
+                    hkdfKey,
+                    { name: "AES-GCM", length: 256 }, // Generate a 256-bit key for Fernet
+                    true,
+                    ["encrypt", "decrypt"]
+                );
+
+                // Export the derived key to Base64 URL-safe format
+                const rawKey = await crypto.subtle.exportKey("raw", derivedKey);
+                return btoa(String.fromCharCode(...new Uint8Array(rawKey)))
+                    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+            }
 
         </script>
     </body>
