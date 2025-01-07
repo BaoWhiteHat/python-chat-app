@@ -17,13 +17,20 @@ class AuthController:
 
             user = User.query.filter_by(email=email).first()
             if user and check_password_hash(user.password, password):
-                have_session = self.validate_session()
-                if have_session is None:
-                    # Create a new session
-                    session_id = self.create_session(user)
+                # Create a new session
+                session_id = self.create_session(user)
 
-                    # Store session ID in a secure cookie
-                    flask_session['session_id'] = session_id
+                # Store session ID in a secure cookie
+                flask_session['session_id'] = session_id
+
+                # have_session = self.validate_session()
+                # print(f"have_session:{have_session}")
+                # if have_session is None:
+                #     # Create a new session
+                #     session_id = self.create_session(user)
+                #
+                #     # Store session ID in a secure cookie
+                #     flask_session['session_id'] = session_id
 
                 flash('Logged in successfully!', category='success')
                 return redirect(url_for('chat.chat'))
@@ -40,7 +47,7 @@ class AuthController:
             db.session.delete(session)
 
         # Create a new session
-        expires_at = datetime.utcnow() + timedelta(days=7)  # Session valid for 7 days
+        expires_at = datetime.utcnow() + timedelta(days=1)  # Session valid for 1 day
         new_session = Session(user_id=user.id, expires_at=expires_at)
         db.session.add(new_session)
         db.session.commit()

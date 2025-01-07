@@ -31,6 +31,9 @@ class SecurityUtils:
     def derive_shared_secret(private_key, peer_public_key):
         """Derive a shared secret using ECDH."""
         shared_secret = private_key.exchange(ec.ECDH(), peer_public_key)
+        # Convert shared secret to base64 for logging
+        shared_secret_base64 = base64.urlsafe_b64encode(shared_secret).decode('utf-8')
+        print("Shared Secret (Base64):", shared_secret_base64)
         return shared_secret
 
     @staticmethod

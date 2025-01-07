@@ -1,4 +1,4 @@
-from flask import Blueprint, session, redirect, url_for, request, g
+from flask import Blueprint, session, redirect, url_for, request
 from datetime import datetime
 from flask_cyber_app.models.models import Session, User
 
@@ -19,30 +19,33 @@ class Router:
         excluded_endpoints = excluded_endpoints or []
 
         @app.before_request
-        @app.before_request
         def validate_session():
             """Middleware to validate session before each request."""
             if request.endpoint in excluded_endpoints:
                 return
 
             session_id = session.get("session_id")
+            print(session_id)
             if not session_id:
                 return redirect(url_for("auth.login"))
 
             active_session = Session.query.get(session_id)
+            print(active_session)
             if not active_session or active_session.expires_at < datetime.utcnow():
+                print("session expire ?")
                 session.pop("session_id", None)
                 return redirect(url_for("auth.login"))
 
             # Fetch user object explicitly
             user = User.query.get(active_session.user_id)
+            print(f"user:{user}")
             if not user:
                 session.pop("session_id", None)
                 return redirect(url_for("auth.login"))
 
-            # Attach session and user to global context
-            g.current_session = active_session
-            g.current_user = user
+            # Store session and user in Flask's session object
+            session["current_session"] = active_session.id
+            session["current_user"] = user.id
 
         # Register blueprints and routes
         for blueprint_name, routes in self.combined_routes.items():

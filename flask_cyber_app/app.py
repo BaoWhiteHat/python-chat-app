@@ -58,7 +58,7 @@ class App:
         """
         Run the application using SocketIO.
         """
-        Extension.socketio.run(self.app, debug=True)
+        Extension.socketio.run(self.app, debug=False)
 
 
 if __name__ == '__main__':
