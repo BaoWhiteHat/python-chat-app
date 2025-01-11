@@ -1,5 +1,8 @@
 import os
 
+import ssl
+import eventlet
+import eventlet.wsgi
 from flask import Flask
 from config.configs import Config
 from config.expection_handler import ExceptionHandler
@@ -8,6 +11,8 @@ from flask_cyber_app.models.models import User
 from flask_cyber_app.routes.all_routes import all_routes
 from flask_cyber_app.routes.router import Router
 
+keys_and_certificate = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'keys_and_certificate'))
+print(keys_and_certificate)
 
 class App:
     def __init__(self):
@@ -58,7 +63,23 @@ class App:
         """
         Run the application using SocketIO.
         """
-        Extension.socketio.run(self.app, debug=False)
+        # ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        # ssl_context.load_cert_chain(
+        #     certfile=f'{keys_and_certificate}/certificate.crt',
+        #     keyfile=f'{keys_and_certificate}/ec-private-key.pem'
+        # )
+        # # Wrap socket with SSL
+        # listener = eventlet.listen(('127.0.0.1', 5000))
+        # ssl_socket = ssl_context.wrap_socket(listener, server_side=True)
+        #
+        # # Run the Eventlet WSGI server with SSL
+        # eventlet.wsgi.server(ssl_socket, self.app)
+
+        Extension.socketio.run(
+            self.app,
+            debug=False,
+
+        )
 
 
 if __name__ == '__main__':

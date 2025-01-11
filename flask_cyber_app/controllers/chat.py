@@ -1,10 +1,7 @@
-import base64
-import random
 import time
-from flask import session as flask_session
-from flask import request
+from flask import request, session
 from flask_socketio import emit
-from flask_cyber_app.models.models import Session, db
+from flask_cyber_app.models.models import Session, db, User, Chat, ChatRecipient
 from flask_cyber_app.socket_connection.channel_manager import ChannelManager
 from flask_cyber_app.utils.cache_utils import CacheUtils
 from flask_cyber_app.utils.security_utils import SecurityUtils
@@ -13,139 +10,194 @@ from flask_cyber_app.utils.security_utils import SecurityUtils
 class ChatController:
     def __init__(self, socketio):
         self.socketio = socketio
-        self.channel_manager = ChannelManager()  # Initialize the ChannelManager
+        self.socket_manager = ChannelManager()  # Initialize the ChannelManager
         self.register_events()
+        self.cache_utils = CacheUtils()
         self.events_registered = False
 
     def register_events(self):
         self.socketio.on_event("key_exchange_init", self.handle_key_exchange_init)
         print("key_exchange_init")
-        self.socketio.on_event("key_exchange_final", self.handle_key_exchange_final)
-        print("key_exchange_final")
         self.socketio.on_event("send_message", self.handle_message)
         print("send_message")
+        self.socketio.on_event("connect", self.handle_connect)
+        print("connect event")
 
-    def handle_key_exchange_init(self):
+    def handle_connect(self):
+        """Handles a new WebSocket connection and stores the socket ID."""
+        session_id = session.get("session_id")
+        username = self.cache_utils.retrieve(f"current_user_name_{session_id}")
+        self.cache_utils.store(f"current_socket_{session_id}", request.sid)
+
+        if session_id:
+            active_session = Session.query.get(session_id)
+            if active_session:
+                active_session.socket_id = request.sid  # Set socket ID here
+                db.session.commit()
+                print(f"Socket ID {request.sid} stored for session {session_id}")
+                self.socketio.emit('connect_server', {'username': username}, to=request.sid)
+
+    def handle_key_exchange_init(self, data):
         """
         Handle the initialization of key exchange.
         Generates and sends the server's public key to the client.
         """
         try:
-            # Generate ECDH key pair
-            private_key, public_key = SecurityUtils.generate_ecdh_key_pair()
+            print(data)
 
-            # Serialize server public key
-            server_public_key = SecurityUtils.serialize_public_key(public_key)
+            # Define strategy for handling different states
+            state_handlers = {
+                'recipient_process_secret_false': self._handle_recipient_process_secret_false,
+                'sender_process_secret_false_recipient_true': self._handle_sender_process_secret_false_recipient_true,
+                'key_exchange_complete': self._handle_key_exchange_complete,
+            }
 
-            # Remove PEM headers, footers, and line breaks
-            server_public_key_base64 = "".join(
-                server_public_key.splitlines()[1:-1]  # Strip headers and footers
-            )
+            # Determine state and call the appropriate handler
+            state = self._determine_key_exchange_state(data)
+            print(state)
+            if state in state_handlers:
+                state_handlers[state](data)
+            else:
+                emit("error", {"message": "Key exchange failed due to invalid state"})
+                raise ValueError("Invalid key exchange state.")
 
-            # Temporarily store the private key in the cache
-            CacheUtils.store(f"private_key_{request.sid}", private_key)
+        except ValueError as ve:
+            print(f"Validation error during key exchange: {ve}")
+            emit("error", {"message": str(ve)})
 
-            # Send server's public key to the client
-            emit("key_exchange_response", {"public_key": server_public_key})
         except Exception as e:
             print(f"Error in key exchange initialization: {e}")
             emit("error", {"message": "Key exchange initialization failed"})
 
-    def handle_key_exchange_final(self, data):
+    def _determine_key_exchange_state(self, data):
         """
-        Finalize the key exchange and derive shared secrets for encryption.
+        Determine the key exchange state based on the input data.
         """
-        try:
-            print("handle_key_exchange_final function call")
+        if not data.get('recipient_process_secret', True):
+            return 'recipient_process_secret_false'
+        elif not data.get('sender_process_secret', True) and data.get('recipient_process_secret', False):
+            return 'sender_process_secret_false_recipient_true'
+        elif data.get("key_exchange_complete", True):
+            return 'key_exchange_complete'
+        return 'invalid_state'
 
-            # Deserialize the client's public key
-            client_public_key_bytes = f"-----BEGIN PUBLIC KEY-----\n{data['public_key']}\n-----END PUBLIC KEY-----"
-            client_public_key = SecurityUtils.deserialize_public_key(client_public_key_bytes.encode())
+    def _handle_recipient_process_secret_false(self, data):
+        """
+        Handle the case where recipient_process_secret is False.
+        """
+        user = User.query.filter_by(username=data.get('recipient_name')).first()
+        if not user:
+            raise ValueError("Recipient user not found.")
 
-            # Retrieve server's private key from the cache
-            private_key = CacheUtils.retrieve(f"private_key_{request.sid}")
-            if not private_key:
-                emit("error", {"message": "Key exchange failed: private key not found"})
-                return
+        session_recipient = Session.query.filter_by(user_id=user.id).first()
+        if not session_recipient:
+            raise ValueError("Session for recipient user not found.")
 
-            # Derive a shared secret using ECDH
-            shared_secret = SecurityUtils.derive_shared_secret(private_key, client_public_key)
-            shared_secret_base64 = base64.urlsafe_b64encode(shared_secret).decode('utf-8')
-            print(f"shared_secret: {shared_secret_base64}")
+        session_id = session.get("session_id")
+        sender_socket_id = self.cache_utils.retrieve(f"current_socket_{session_id}")
+        recipient_socket_id = session_recipient.socket_id
+        self.cache_utils.store(f"current_recipient_socket_{session_id}", recipient_socket_id)
 
-            # Derive a Fernet-compatible symmetric key
-            fernet_key = SecurityUtils.derive_fernet_key(shared_secret)
-            CacheUtils.store(f"fernet_key{request.sid}", fernet_key)
-            print(fernet_key)
+        emit(
+            "key_exchange_response_recipient",
+            {
+                "public_key": data.get('public_key'),
+                "sender_socket_id": sender_socket_id,
+                "recipient_socket_id": recipient_socket_id,
+            },
+            to=recipient_socket_id,
+        )
 
-            # Save the derived Fernet key and socket ID to the session model
-            session = Session.query.filter_by(user_id=flask_session.get("current_user")).first()
-            # available
-            if session:
-                session.fernet_key = fernet_key.decode()
-                session.socket_id = request.sid
-                db.session.commit()
-                print(f"Session updated: User ID {session.user_id}, Socket ID {session.socket_id}, Fernet Key saved.")
+    def _handle_sender_process_secret_false_recipient_true(self, data):
+        """
+        Handle the case where sender_process_secret is False and recipient_process_secret is True.
+        """
+        session_id = session.get("session_id")
+        print(request.sid)
+        self.cache_utils.store(f"current_socket_{session_id}", request.sid)
+        self.cache_utils.store(f"current_recipient_socket_{session_id}", data.get('sender_socket_id'))
 
-            emit("key_exchange_complete", {"message": "Key exchange successful!"})
-        except Exception as e:
-            print(f"Error in handle_key_exchange_final: {e}")
-            emit("error", {"message": "Key exchange failed"})
+        emit(
+            "key_exchange_response_sender",
+            {
+                "public_key": data.get('public_key'),
+                "recipient_socket_id": request.sid,
+                "key_exchange_complete": True,
+
+            },
+            to=data.get('sender_socket_id'),
+        )
+
+    def _handle_key_exchange_complete(self):
+        """
+        Handle the case where key_exchange_complete is True.
+        """
+        emit("key_exchange_complete", {"message": "Key exchange complete"})
 
     def handle_message(self, data):
         """
         Handle the receipt and broadcasting of messages.
+        Saves the chat first, then saves the chat recipient after the chat is saved.
         Decrypts incoming messages and re-encrypts them for each recipient.
         """
         try:
-            print("handle_message function call")
-            print(data['message'])
+            print(data)
+            session_id = session.get("session_id")
+            print(f"session_id {session_id}")
 
-            # Find the sender's session using the socket ID
-            sender_session = Session.query.filter_by(socket_id=request.sid).first()
-            if not sender_session:
-                print("can not find sender_session")
-                emit("error", {"message": "Sender session not found"})
+            # Retrieve socket IDs
+            sender_socket_id = self.cache_utils.retrieve(f"current_socket_{session_id}")
+            recipient_socket_id = self.cache_utils.retrieve(f"current_recipient_socket_{session_id}")
+            recipient_session = Session.query.filter_by(socket_id=recipient_socket_id).first()
+            username = self.cache_utils.retrieve(f"current_user_name_{session_id}")
+            user_id = self.cache_utils.retrieve(f"current_user_{session_id}")
+
+            if not (recipient_session and user_id):
+                emit("error", {"message": "Invalid session or recipient data"})
                 return
-            print("handle_message function call 1")
-            # Retrieve the sender's Fernet key
-            sender_fernet_key = sender_session.fernet_key
-            if not sender_fernet_key:
-                emit("error", {"message": "Sender Fernet key not found"})
-                return
-            print("handle_message function call 2")
-            # Decrypt the incoming message using the sender's Fernet key
-            sender_fernet = SecurityUtils.create_fernet_instance(sender_fernet_key.encode())
-            print(sender_fernet)
-            decrypted_message = sender_fernet.decrypt(data["message"].encode(), ttl=3600).decode()
-
-            print(f"Decrypted message from sender: {decrypted_message}")
-
-            # Encrypt and send the message to all recipients
-            all_sessions = Session.query.filter(Session.expire_at > time.time()).all()
-            for recipient_session in all_sessions:
-                # Retrieve the recipient's Fernet key
-                recipient_fernet_key = recipient_session.fernet_key
-                if not recipient_fernet_key:
-                    print(f"Fernet key not found for recipient {recipient_session.user_id}")
-                    continue
-
-                # Encrypt the message for the recipient
-                recipient_fernet = SecurityUtils.create_fernet_instance(recipient_fernet_key.encode())
-                encrypted_message = recipient_fernet.encrypt(decrypted_message.encode()).decode()
-
-                # Emit the encrypted message to the recipient
-                emit(
-                    "new_message",
-                    {
-                        "message": encrypted_message,
-                        "username": sender_session.user.username
-                    },
-                    room=recipient_session.socket_id,
+            try:
+                # Save Chat instance
+                chat = Chat(
+                    user_id=user_id,
+                    message_body=data.get('message'),
+                    salt=data.get('salt')
                 )
-                print(f"Message sent to {recipient_session.socket_id} (User ID: {recipient_session.user_id})")
+                db.session.add(chat)
+                db.session.commit()  # Commit to generate a Chat ID
+            except Exception as e:
+                # Rollback in case of error
+                db.session.rollback()
+                print(f"Error handling message: {e}")
+                emit("error", {"message": "Message handling failed"})
+                return
 
+            # Save ChatRecipient instance
+            chat_recipient = ChatRecipient(
+                recipient_id=recipient_session.user_id,
+                recipient_group_id=None,  # Replace with appropriate logic or value
+                message_id=chat.id,  # Use the saved chat's ID
+                is_read=False
+            )
+            db.session.add(chat_recipient)
+            db.session.commit()
+
+            print(f"recipient_socket_id: {recipient_socket_id}")
+            print(f"sender_socket_id {sender_socket_id}")
+
+            if data.get('socket_id_for_another') != sender_socket_id:
+                # Emit the message to the recipient
+                emit("receive_message",
+                     {'message': data.get('message'),
+                      'username': username,
+                      },
+                     to=recipient_socket_id
+                     )
+            else:
+                print("sender just send to himself")
+                return
         except Exception as e:
+            # Rollback in case of error
+            db.session.rollback()
             print(f"Error handling message: {e}")
             emit("error", {"message": "Message handling failed"})
-
+            return

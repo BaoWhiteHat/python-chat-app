@@ -1,6 +1,7 @@
 from flask import Blueprint, session, redirect, url_for, request
 from datetime import datetime
-from flask_cyber_app.models.models import Session, User
+from flask_cyber_app.models.models import Session, User, db
+from flask_cyber_app.utils.cache_utils import CacheUtils
 
 
 class Router:
@@ -10,6 +11,7 @@ class Router:
         :param combined_routes: Dictionary with blueprint names as keys and route collections as values.
         """
         self.combined_routes = combined_routes
+        self.cache_utils = CacheUtils()
 
     def register_routes(self, app, excluded_endpoints=None):
         """
@@ -42,10 +44,14 @@ class Router:
             if not user:
                 session.pop("session_id", None)
                 return redirect(url_for("auth.login"))
+            # Store socket_id in the session table
+            if hasattr(request, 'sid'):  # Ensure `sid` exists (typically in WebSocket requests)
+                active_session.socket_id = request.sid
+                db.session.commit()
 
-            # Store session and user in Flask's session object
-            session["current_session"] = active_session.id
-            session["current_user"] = user.id
+            self.cache_utils.store(f"current_session_{session_id}", active_session.id)
+            self.cache_utils.store(f"current_user_{session_id}", user.id)
+            self.cache_utils.store(f"current_user_name_{session_id}", user.username)
 
         # Register blueprints and routes
         for blueprint_name, routes in self.combined_routes.items():

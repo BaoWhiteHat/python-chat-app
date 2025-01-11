@@ -6,7 +6,7 @@ class ChannelManager:
     def __init__(self):
         self.cache_utils = CacheUtils  # Use CacheUtils for storing shared secrets
 
-    def establish_shared_secret(self, sender_socket_id, recipient_socket_id, sender_public_key, recipient_private_key, ttl=300):
+    def establish_shared_secret(self, sender_socket_id, recipient_socket_id, sender_public_key, recipient_private_key, ttl=3600):
         """
         Derive and store a shared secret between two users.
         """

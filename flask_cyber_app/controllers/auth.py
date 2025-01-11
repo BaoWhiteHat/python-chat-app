@@ -32,11 +32,13 @@ class AuthController:
                 #     # Store session ID in a secure cookie
                 #     flask_session['session_id'] = session_id
 
+                print(f"current_user:{current_user}")
+
                 flash('Logged in successfully!', category='success')
                 return redirect(url_for('chat.chat'))
 
             flash('Invalid email or password.', category='error')
-
+            print(f"current_user:{current_user}")
         return render_template("login.html", user=current_user)
 
     def create_session(self, user):
@@ -102,20 +104,3 @@ class AuthController:
                 return redirect(url_for('chat.chat'))
 
         return render_template("sign_up.html", user=current_user)
-
-    def validate_session(self):
-        """Validate the session ID stored in the cookie."""
-        session_id = flask_session.get('session_id')
-        if not session_id:
-            return None
-
-        session = Session.query.get(session_id)
-        if not session or session.expires_at < datetime.utcnow():
-            # Session is invalid or expired
-            flask_session.pop('session_id', None)
-            if session:
-                db.session.delete(session)
-                db.session.commit()
-            return None
-
-        return session.user_id
